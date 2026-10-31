@@ -1,0 +1,480 @@
+import React, { useState, useMemo, useEffect } from 'react';
+import { Layout, Menu, Table, Button, Card, Tag, Timeline, Select, message, Row, Col, Statistic, Spin, Upload, Tooltip, Input } from 'antd';
+import { 
+  UserOutlined, AimOutlined, SendOutlined, SearchOutlined,
+  DollarCircleOutlined, RiseOutlined, UploadOutlined, InboxOutlined, DeleteOutlined, DownloadOutlined, ClearOutlined 
+} from '@ant-design/icons';
+
+const { Header, Content } = Layout;
+
+export default function App() {
+  const [currentTab, setCurrentTab] = useState('1');
+  const [selectedClient, setSelectedClient] = useState<any>(null);
+  
+  // данные из бд
+  const [clients, setClients] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [allPlaces, setAllPlaces] = useState<string[]>([]);
+
+  // для большого удаления
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+
+  // состояния для фильтров
+  const [placeA, setPlaceA] = useState('');
+  const [placeB, setPlaceB] = useState('');
+  const [searchResult, setSearchResult] = useState<any[]>([]);
+  const [hasSearched, setHasSearched] = useState(false);
+
+  // состояние для поиска клиентов
+  const [clientSearchText, setClientSearchText] = useState('');
+
+  const cardStyle = { borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' };
+
+  // загрузка бд
+  const loadData = () => {
+    setIsLoading(true);
+    fetch('http://localhost:8000/api/clients')
+      .then(res => res.json())
+      .then(data => {
+        setClients(data);
+        const places = new Set<string>();
+        data.forEach((client: any) => {
+          client.history.forEach((h: any) => places.add(h.place));
+        });
+        const placesArray = Array.from(places);
+        setAllPlaces(placesArray);
+        if (placesArray.length >= 2) {
+          setPlaceA(placesArray[0]);
+          setPlaceB(placesArray[1]);
+        }
+        setIsLoading(false);
+      })
+      .catch(err => {
+        console.error(err);
+        message.error("Ошибка соединения с базой данных");
+        setIsLoading(false);
+      });
+  };
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  // выручка
+  const isSegmentView = currentTab === '2' && hasSearched;
+
+  const calculateRevenue = useMemo(() => {
+    const currentData = isSegmentView ? searchResult : clients;
+    return currentData.reduce((total, client) => {
+      const clientSum = client.history.reduce((sum: number, h: any) => sum + h.amount, 0);
+      return total + clientSum;
+    }, 0);
+  }, [isSegmentView, searchResult, clients]);
+
+  // конверсия
+  const calculateConversion = useMemo(() => {
+    const currentData = isSegmentView ? searchResult : clients;
+    if (currentData.length === 0) return 0;
+    let crossOverClients = 0;
+    currentData.forEach(client => {
+      const uniquePlaces = new Set(client.history.map((h: any) => h.place));
+      if (uniquePlaces.size > 1) crossOverClients++;
+    });
+    return (crossOverClients / currentData.length) * 100;
+  }, [isSegmentView, searchResult, clients]);
+
+  const columns = [
+    { title: 'ФИО', dataIndex: 'name', key: 'name', render: (text: string) => <b>{text}</b> },
+    { title: 'Телефон', dataIndex: 'phone', key: 'phone' },
+    { title: 'Email', dataIndex: 'email', key: 'email', render: (text: string) => text || '-' },
+    { 
+      title: 'Точность', 
+      dataIndex: 'match', 
+      key: 'match', 
+      render: (text: string, record: any) => {
+        const color = text === '100%' ? 'success' : text === '95%' ? 'processing' : 'warning';
+        const tooltipText = text === '100%' 
+          ? "Максимальная уверенность: совпали телефон и email" 
+          : text === '95%' 
+          ? "Высокая уверенность: есть либо телефон, либо email" 
+          : "Низкая уверенность: данных мало, возможно, это дубль или семейный номер";
+
+        return (
+          <Tooltip title={tooltipText}>
+            <Tag color={color} style={{ borderRadius: '10px', cursor: 'help' }}>{text}</Tag>
+          </Tooltip>
+        );
+      }
+    },
+    { title: 'Действие', key: 'action', render: (_: any, record: any) => <Button type="primary" ghost onClick={() => setSelectedClient(record)}>Профиль</Button> },
+  ];
+
+  // поиск
+  const filteredClients = useMemo(() => {
+    if (!clientSearchText) return clients;
+    const lowerQuery = clientSearchText.toLowerCase();
+    return clients.filter(c => 
+      (c.name && c.name.toLowerCase().includes(lowerQuery)) ||
+      (c.phone && c.phone.includes(lowerQuery)) ||
+      (c.email && c.email.toLowerCase().includes(lowerQuery))
+    );
+  }, [clients, clientSearchText]);
+
+  const menuItems = [
+    { key: '1', icon: <UserOutlined />, label: 'Клиенты' },
+    { key: '2', icon: <AimOutlined />, label: 'Сегменты' },
+    { key: '3', icon: <SendOutlined />, label: 'Выгрузка' },
+    { key: '4', icon: <UploadOutlined />, label: 'Загрузка' },
+  ];
+
+  const handleSegmentSearch = () => {
+    if (placeA === placeB) {
+      setSearchResult([]); setHasSearched(true);
+      message.warning('Выберите разные места');
+      return;
+    }
+    const found = clients.filter(client => {
+      if (client.share_history === false) return true; 
+      
+      const visitedA = client.history.some((h: any) => h.place === placeA);
+      const visitedB = client.history.some((h: any) => h.place === placeB);
+      return visitedA && visitedB;
+    });
+    setSearchResult(found);
+    setHasSearched(true);
+    if (found.length > 0) message.success(`Найдено клиентов: ${found.length}`);
+  };
+
+  const handleClearSegment = () => {
+    setSearchResult([]);
+    setHasSearched(false);
+    message.info('Результаты поиска сброшены');
+  };
+
+  // рекомендации
+   const getRecommendations = (clientHistory: any[]) => {
+    const visitedPlaces = clientHistory.map(h => h.place);
+    
+    const similarClients = clients.filter(otherClient => {
+      const otherPlaces = otherClient.history.map((h: any) => h.place);
+      return otherPlaces.some((p: string) => (visitedPlaces as string[]).includes(p));
+    });
+
+    const placeCounts: Record<string, number> = {};
+    similarClients.forEach(otherClient => {
+      otherClient.history.forEach((h: any) => {
+        if (!(visitedPlaces as string[]).includes(h.place)) {
+          placeCounts[h.place] = (placeCounts[h.place] || 0) + 1;
+        }
+      });
+    });
+
+    const sortedPlaces = Object.keys(placeCounts).sort((a, b) => placeCounts[b] - placeCounts[a]);
+    return sortedPlaces.slice(0, 2);
+  };
+
+  // выгрузка
+  const downloadCSV = (exportType: 'all' | 'segment') => {
+    const dataToExport = exportType === 'all' ? filteredClients : searchResult;
+    
+    if (dataToExport.length === 0) { 
+      message.error(exportType === 'all' ? 'База пуста' : 'Сначала найдите сегмент'); 
+      return; 
+    }
+
+    let csvContent = "ФИО;Телефон;Email;Сумма_трат;Рекомендация\n";
+    
+    dataToExport.forEach(e => {
+      const totalSum = e.history.reduce((sum: number, h: any) => sum + h.amount, 0);
+      const recs = getRecommendations(e.history);
+      const recString = recs.length > 0 ? recs.join(' ИЛИ ') : 'Обошел весь ТЦ';
+      
+      csvContent += `${e.name};${e.phone || ''};${e.email || ''};${totalSum};${recString}\n`;
+    });
+
+    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", exportType === 'all' ? "all_clients.csv" : "segment_clients.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    message.success('Файл успешно скачан!');
+  };
+
+  return (
+    <Layout style={{ minHeight: '100vh', background: '#f5f7fa', fontFamily: 'Inter, sans-serif' }}>
+      <Header style={{ display: 'flex', alignItems: 'center', background: 'linear-gradient(90deg, #001529 0%, #003a70 100%)', padding: '0 40px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', zIndex: 1, width: '100%' }}>
+        <div style={{ color: 'white', fontSize: '22px', fontWeight: 800, marginRight: '50px', letterSpacing: '0.5px' }}>
+          <span style={{ color: '#1890ff' }}>●</span> ТЦ Триада
+        </div>
+        <Menu 
+          theme="dark" mode="horizontal" selectedKeys={[currentTab]} items={menuItems} 
+          onClick={(e) => setCurrentTab(e.key)} 
+          style={{ flex: 1, background: 'transparent', borderBottom: 'none', fontSize: '16px' }} 
+        />
+      </Header>
+
+      <Content style={{ padding: '40px', width: '100%', boxSizing: 'border-box' }}>
+        
+        {isLoading ? (
+          <div style={{ textAlign: 'center', marginTop: '100px' }}>
+            <Spin size="large" />
+            <h3 style={{ marginTop: '20px' }}>Загружаем данные...</h3>
+          </div>
+        ) : (
+          <div style={{ width: '100%' }}>
+            
+            <Row gutter={24} style={{ marginBottom: '30px' }}>
+              <Col span={8}>
+                <Card style={cardStyle} bodyStyle={{ padding: '24px' }}>
+                  <Statistic 
+                    title={isSegmentView ? "Потенциал (по сегменту)" : "Общая выручка"} 
+                    value={calculateRevenue} 
+                    prefix={<DollarCircleOutlined style={{ color: '#52c41a' }} />} 
+                    suffix="₽" 
+                    valueStyle={{ color: '#3f8600', fontWeight: 700 }} 
+                  />
+                </Card>
+              </Col>
+              <Col span={8}>
+                <Card style={cardStyle} bodyStyle={{ padding: '24px' }}>
+                  <Statistic 
+                    title={isSegmentView ? "Клиентов в сегменте" : "Клиентов в базе"} 
+                    value={isSegmentView ? searchResult.length : filteredClients.length} 
+                    prefix={<UserOutlined style={{ color: '#1890ff' }} />} 
+                    suffix="чел." 
+                    valueStyle={{ color: '#1890ff', fontWeight: 700 }} 
+                  />
+                </Card>
+              </Col>
+              <Col span={8}>
+                <Card style={cardStyle} bodyStyle={{ padding: '24px' }}>
+                  {!isSegmentView ? (
+                    <Statistic title="Конверсия" value={calculateConversion} precision={1} prefix={<RiseOutlined style={{ color: '#722ed1' }} />} suffix="%" valueStyle={{ color: '#722ed1', fontWeight: 700 }} />
+                  ) : (
+                    <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
+                      Поиск по сегментам
+                    </div>
+                  )}
+                </Card>
+              </Col>
+            </Row>
+
+            {currentTab === '1' && (
+              <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
+                <Card 
+                  title={<span style={{ fontSize: '18px', fontWeight: 600 }}>База клиентов</span>} 
+                  style={{ flex: 1, ...cardStyle }} 
+                  bodyStyle={{ padding: '0' }}
+                  extra={
+                    <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+                      {/* СТРОКА ПОИСКА КЛИЕНТОВ */}
+                      <Input 
+                        placeholder="Поиск по ФИО, телефону или email..." 
+                        prefix={<SearchOutlined />} 
+                        value={clientSearchText}
+                        onChange={(e) => setClientSearchText(e.target.value)}
+                        style={{ width: '300px', borderRadius: '8px' }}
+                        allowClear
+                      />
+                      {selectedRowKeys.length > 0 && (
+                        <Button 
+                          danger type="primary" icon={<DeleteOutlined />}
+                          onClick={async () => {
+                            if (window.confirm(`Удалить ${selectedRowKeys.length} клиентов?`)) {
+                              try {
+                                await fetch('http://localhost:8000/api/clients/delete_batch', {
+                                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify(selectedRowKeys)
+                                });
+                                message.success('Клиенты удалены');
+                                setSelectedRowKeys([]); loadData();
+                              } catch (e) { message.error('Ошибка удаления'); }
+                            }
+                          }}
+                        >
+                          Удалить ({selectedRowKeys.length})
+                        </Button>
+                      )}
+                    </div>
+                  }
+                >
+                  <Table 
+                    dataSource={filteredClients} 
+                    columns={columns} 
+                    pagination={{ pageSize: 8 }} 
+                    rowKey="id" 
+                    rowSelection={{ selectedRowKeys, onChange: setSelectedRowKeys }}
+                  />
+                </Card>
+                {selectedClient && (
+                  <Card 
+                    title={<span style={{ fontSize: '18px', fontWeight: 600 }}>Профиль: {selectedClient.name}</span>} 
+                    style={{ width: '400px', flexShrink: 0, ...cardStyle }} 
+                    extra={
+                      <div style={{ display: 'flex', gap: '10px' }}>
+                        <Button danger icon={<DeleteOutlined />} onClick={async () => {
+                          if (window.confirm('Удалить клиента и всю его историю?')) {
+                            await fetch(`http://localhost:8000/api/clients/${selectedClient.id}`, { method: 'DELETE' });
+                            message.success('Клиент удален');
+                            setSelectedClient(null); loadData();
+                          }
+                        }}>Удалить</Button>
+                        <Button type="text" onClick={() => setSelectedClient(null)}>Закрыть</Button>
+                      </div>
+                    }
+                  >
+                    {/* БЛОК С ЛОЯЛЬНОСТЬЮ И ДАТОЙ */}
+                    <div style={{ background: '#f0f2f5', padding: '16px', borderRadius: '8px', marginBottom: '20px' }}>
+                      <p style={{ margin: 0 }}><b>Телефон:</b> {selectedClient.phone || 'Нет данных'}</p>
+                      <p style={{ margin: '8px 0' }}><b>Email:</b> {selectedClient.email || 'Нет данных'}</p>
+                      
+                      <p style={{ margin: '8px 0' }}>
+                        <b>Статус:</b>{' '}
+                        <Tag color={(() => {
+                          const tier = String(selectedClient.loyalty_tier || '').trim().toUpperCase();
+                          if (tier === 'GOLD') return 'gold';
+                          if (tier === 'SILVER') return 'default'; 
+                          if (tier === 'PLATINUM') return 'purple';
+                          return 'blue'; 
+                        })()}>
+                          {selectedClient.loyalty_tier || 'Basic'}
+                        </Tag>
+                      </p>
+                      <p style={{ margin: '8px 0' }}><b>Дата регистрации:</b> {selectedClient.registration_date}</p>
+
+                      <p style={{ margin: '8px 0' }}>
+                        <b>Разглашение данных:</b> {selectedClient.share_history 
+                          ? <Tag color="green">Разрешено</Tag> 
+                          : <Tag color="red">Запрещено</Tag>}
+                      </p>
+                      
+                      <p style={{ margin: 0 }}><b>Точность:</b> <Tag color="blue">{selectedClient.match}</Tag></p>
+                    </div>
+                    <h4>История активности:</h4>
+                    <Timeline items={selectedClient.history.map((h: any, i: number) => ({ key: i, color: h.place === 'Ресторан' ? 'red' : h.place === 'Кино' ? 'purple' : 'green', children: <span><b>{h.place}</b> — {h.amount} ₽ <span style={{color: 'gray', fontSize: '12px'}}>({h.time})</span></span> }))} />
+                  </Card>
+                )}
+              </div>
+            )}
+
+            {currentTab === '2' && (
+              <Card title={<span style={{ fontSize: '18px', fontWeight: 600 }}>Рекомендации на основе предпочтений</span>} style={cardStyle}>
+                <div style={{ display: 'flex', gap: '24px', marginBottom: '30px', alignItems: 'flex-end', background: '#fafafa', padding: '20px', borderRadius: '8px', border: '1px solid #f0f0f0' }}>
+                  <div>
+                    <p style={{ fontWeight: 500 }}>Клиент посещал:</p>
+                    <Select value={placeA} onChange={(val) => { setPlaceA(val); }} style={{ width: 200 }} size="large" options={allPlaces.map(p => ({ value: p, label: p }))} />
+                  </div>
+                  <div style={{ paddingBottom: '10px', fontWeight: 'bold' }}>И посещал:</div>
+                  <div>
+                    <p style={{ fontWeight: 500 }}>&nbsp;</p>
+                    <Select value={placeB} onChange={(val) => { setPlaceB(val); }} style={{ width: 200 }} size="large" options={allPlaces.map(p => ({ value: p, label: p }))} />
+                  </div>
+                  <Button type="primary" size="large" onClick={handleSegmentSearch} style={{ height: '40px', padding: '0 30px', borderRadius: '8px' }}>Найти и предложить</Button>
+                  
+                  <Button 
+                    size="large" 
+                    icon={<ClearOutlined />} 
+                    disabled={!hasSearched}
+                    onClick={handleClearSegment}
+                    style={{ height: '40px', padding: '0 20px', borderRadius: '8px', marginLeft: 'auto' }}
+                  >
+                    Сбросить
+                  </Button>
+                </div>
+                
+                <Table 
+                  dataSource={hasSearched ? searchResult : []} 
+                  columns={[
+                    { title: 'ФИО', dataIndex: 'name', key: 'name', render: (text: string) => <b>{text}</b> }, 
+                    { title: 'Телефон', dataIndex: 'phone' },
+                    { title: 'Email', dataIndex: 'email', render: (text: string) => text || '-' },
+                    { 
+                      title: 'Рекомендация (на основе похожих клиентов)', 
+                      key: 'action', 
+                      render: (_: any, record: any) => {
+                        const recs = getRecommendations(record.history);
+                        
+                        if (recs.length === 0) return <Tag color="default">Обошел весь ТЦ</Tag>;
+                        
+                        return (
+                          <div style={{ display: 'flex', gap: '5px' }}>
+                            {recs.map((r, i) => (
+                              <Tag key={i} color="purple" style={{ padding: '4px 10px' }}>
+                                Предложить: {r}
+                              </Tag>
+                            ))}
+                          </div>
+                        );
+                      } 
+                    }
+                  ]} 
+                  locale={{ emptyText: hasSearched && searchResult.length === 0 ? 'Не найдено' : 'Укажите два места и нажмите "Найти"' }} 
+                  rowKey="id" 
+                />
+              </Card>
+            )}
+
+            {currentTab === '3' && (
+              <Card title={<span style={{ fontSize: '18px', fontWeight: 600 }}>Экспорт данных для рассылки</span>} style={{...cardStyle, maxWidth: '800px', margin: '0 auto', textAlign: 'center' }}>
+                <div style={{ padding: '40px 20px' }}>
+                  <div style={{ fontSize: '48px', marginBottom: '20px' }}>📤</div>
+                  <h3>Готовые списки клиентов</h3>
+                  <p style={{ color: '#666', fontSize: '16px', marginBottom: '30px' }}>
+                    Скачайте файл с контактами (ФИО/Аноним, телефон, email), суммами трат и персональными рекомендациями. 
+                    Он откроется в Excel и готов к загрузке в сервис рассылок.
+                  </p>
+                  
+                  <div style={{ display: 'flex', gap: '20px', justifyContent: 'center' }}>
+                    <Button type="primary" size="large" icon={<DownloadOutlined />} onClick={() => downloadCSV('all')} style={{ height: '50px', padding: '0 30px', fontSize: '16px', borderRadius: '8px' }}>
+                      Скачать всю базу
+                    </Button>
+                    <Button 
+                      size="large" 
+                      icon={<DownloadOutlined />} 
+                      disabled={!hasSearched || searchResult.length === 0}
+                      onClick={() => downloadCSV('segment')}
+                      style={{ height: '50px', padding: '0 30px', fontSize: '16px', borderRadius: '8px' }}
+                    >
+                      Скачать текущий сегмент
+                    </Button>
+                  </div>
+                  {(!hasSearched || searchResult.length === 0) && (
+                    <p style={{ color: 'red', marginTop: '15px', fontSize: '14px' }}>
+                      * Чтобы скачать сегмент, сначала найдите его во вкладке "Сегменты"
+                    </p>
+                  )}
+                </div>
+              </Card>
+            )}
+
+            {currentTab === '4' && (
+              <Card title={<span style={{ fontSize: '18px', fontWeight: 600 }}>Загрузка данных</span>} style={{...cardStyle, maxWidth: '800px', margin: '0 auto' }}>
+                <Upload.Dragger 
+                  name="file" action="http://localhost:8000/api/upload" data={{ source_type: 'file' }}
+                  accept=".csv, .xlsx, .xls"
+                  onChange={(info) => {
+                    if (info.file.status === 'done') {
+                      message.success(`Файл ${info.file.name} успешно загружен!`);
+                      loadData();
+                    } else if (info.file.status === 'error') {
+                      message.error(`Ошибка загрузки файла`);
+                    }
+                  }}
+                  style={{ padding: '40px', background: '#fafafa', borderRadius: '8px', border: '1px dashed #d9d9d9' }}
+                >
+                  <p className="ant-upload-drag-icon"><InboxOutlined style={{ color: '#1890ff', fontSize: '48px' }} /></p>
+                  <p className="ant-upload-text">Нажмите или перетащите файл</p>
+                  <p className="ant-upload-hint">Форматы: CSV и Excel (XLSX)</p>
+                </Upload.Dragger>
+              </Card>
+            )}
+          </div>
+        )}
+      </Content>
+    </Layout>
+  );
+}
